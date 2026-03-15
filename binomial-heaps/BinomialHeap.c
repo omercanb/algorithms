@@ -4,62 +4,7 @@
 
 static void binomHeapInterleave(BinomHeap *h1, BinomHeap *h2);
 
-void binomHeapInit(BinomHeap *h) {
-    h->root = NULL;
-    h->size = 0;
-}
-
-void binomHeapCheckRootListInvariants(const BinomHeap *h) {
-    BinomHeapNode *cur = h->root;
-    // The accumulator for the binary representation of n (this is a property of
-    // binomial heaps)
-    size_t sum = 0;
-    while (cur) {
-        // Check tree invariants first
-        binomTreeCheckInvariants(cur);
-        // Check the degrees are in strictly decreasing order
-        if (cur->sibling) {
-            assert(cur->degree < cur->sibling->degree);
-        }
-        sum += (1 << cur->degree);
-        cur = cur->sibling;
-    }
-    // Check the binary representation of n matches the degrees of nodes in the
-    // root list;
-    assert(sum == h->size);
-}
-
-// Put a new B0 at the start of the list
-// Merge adjacent trees of equal degrees
-// The merge happens only at the root by merging into the root
-// root -> Bk -> Bk -> Bk+1 becomes root -> Bk+1 -> Bk+1 -> root -> Bk+2
-void binomHeapAppend(BinomHeap *h, int key) {
-    // Insert new node at the start of the list
-    BinomHeapNode *node = newBinomHeapNode(key);
-    node->sibling = h->root;
-    h->root = node;
-    // This loop proceeds by merging siblings into root (branch 1) or
-    // merging root with sibling (branch 2)
-    while (h->root->sibling) {
-        BinomHeapNode *cur = h->root;
-        if (cur->degree == cur->sibling->degree) {
-            // Merge so the parent has the smaller key
-            if (cur->key < cur->sibling->key) {
-                BinomHeapNode *tmp = cur->sibling->sibling;
-                binomTreeJoin(cur, cur->sibling);
-                cur->sibling = tmp;
-            } else {
-                h->root = cur->sibling;
-                binomTreeJoin(cur->sibling, cur);
-            }
-        } else {
-            break;
-        }
-    }
-    h->size++;
-}
-
-// Used for a checksum in the heap union
+// Used for a checksums to check integrity of unions, extract min etc.
 static uint64_t hash(int val) {
     uint64_t x = (uint64_t)(unsigned int)val;
     x ^= x >> 16;
@@ -89,6 +34,63 @@ static uint64_t checksum(BinomHeap *h) {
     return sum;
 }
 
+void binomHeapInit(BinomHeap *h) {
+    h->root = NULL;
+    h->size = 0;
+}
+
+// Used in debug mode to make sure all binomial heap properties hold
+void binomHeapCheckRootListInvariants(const BinomHeap *h) {
+    BinomHeapNode *cur = h->root;
+    // The accumulator for the binary representation of n (this is a property of
+    // binomial heaps)
+    size_t sum = 0;
+    while (cur) {
+        // Check tree invariants first
+        binomTreeCheckInvariants(cur);
+        // Check the degrees are in strictly decreasing order
+        if (cur->sibling) {
+            assert(cur->degree < cur->sibling->degree);
+        }
+        sum += (1 << cur->degree);
+        cur = cur->sibling;
+    }
+    // Check the binary representation of n matches the degrees of nodes in the
+    // root list;
+    assert(sum == h->size);
+}
+
+// Put a new B0 at the start of the list
+// Merge adjacent trees of equal degrees
+// The merge happens only at the root by merging into the root
+// root -> Bk -> Bk -> Bk+1 becomes root -> Bk+1 -> Bk+1 -> root -> Bk+2
+BinomHeapNode *binomHeapAppend(BinomHeap *h, int key) {
+    // Insert new node at the start of the list
+    BinomHeapNode *node = newBinomHeapNode(key);
+    node->sibling = h->root;
+    h->root = node;
+    // This loop proceeds by merging siblings into root (branch 1) or
+    // merging root with sibling (branch 2)
+    while (h->root->sibling) {
+        BinomHeapNode *cur = h->root;
+        if (cur->degree == cur->sibling->degree) {
+            // Merge so the parent has the smaller key
+            if (cur->key < cur->sibling->key) {
+                BinomHeapNode *tmp = cur->sibling->sibling;
+                binomTreeJoin(cur, cur->sibling);
+                cur->sibling = tmp;
+            } else {
+                h->root = cur->sibling;
+                binomTreeJoin(cur->sibling, cur);
+            }
+        } else {
+            break;
+        }
+    }
+    h->size++;
+    return node;
+}
+
 // Desctructively union h2 onto h1
 void binomHeapUnion(BinomHeap *h1, BinomHeap *h2) {
 #ifndef NDEBUG
@@ -107,8 +109,7 @@ void binomHeapUnion(BinomHeap *h1, BinomHeap *h2) {
     while (cur && cur->sibling) {
         BinomHeapNode *next = cur->sibling;
         BinomHeapNode *nextNext = next->sibling; // May be null
-        printf("Cur: %zu\n", cur->degree);
-        // cur = next < nextNext
+        // Case: cur = next < nextNext
         if (cur->degree == next->degree &&
             (nextNext == NULL || next->degree < nextNext->degree)) {
             // Merge cur and next
@@ -189,6 +190,82 @@ static void binomHeapInterleave(BinomHeap *h1, BinomHeap *h2) {
 #endif
 }
 
+int binomHeapExtractMin(BinomHeap *h) {
+#ifndef NDEBUG
+    uint64_t preChecksum = checksum(h);
+#endif
+    assert(h->root);
+    // Find min by looping through root list and remove the min tree from the
+    // root list
+    BinomHeapNode *cur = h->root;
+    BinomHeapNode *prev = NULL;
+    BinomHeapNode *minTree = h->root;
+    BinomHeapNode *minTreePrev = NULL;
+    while (cur) {
+        if (cur->key < minTree->key) {
+            minTree = cur;
+            minTreePrev = prev;
+        }
+        prev = cur;
+        cur = cur->sibling;
+    }
+    int minKey = minTree->key;
+
+    // Remove min tree from the list by connecting to its sibling
+    if (minTreePrev == NULL) {
+        h->root = minTree->sibling;
+    } else {
+        minTreePrev->sibling = minTree->sibling;
+    }
+    // Update the size of the heap
+    h->size -= 1 << minTree->degree;
+
+    // Reverse the child list
+    // prev and cur are now pointers to the child list
+    // The children are B_k-1 to B_0
+    // We reverse the sibling connections of the child list
+    // We also need to maintain the size of the child trees for the heap
+    prev = NULL;
+    cur = minTree->child;
+    while (cur) {
+        cur->parent = NULL;
+        BinomHeapNode *next = cur->sibling;
+        cur->sibling = prev;
+        prev = cur;
+        cur = next;
+    }
+    // Because we looped to the end prev is now the root of the reversed list
+    BinomHeapNode *childListRoot = prev;
+    BinomHeap childHeap;
+    binomHeapInit(&childHeap);
+    childHeap.root = childListRoot;
+
+    // The child heap doesn't contain the removed element so -1
+    childHeap.size = (1 << minTree->degree) - 1;
+
+#ifndef NDEBUG
+    binomHeapCheckRootListInvariants(&childHeap);
+#endif
+
+    free(minTree);
+    binomHeapUnion(h, &childHeap);
+#ifndef NDEBUG
+    uint64_t postChecksum = checksum(h) + hash(minKey);
+    assert(preChecksum == postChecksum);
+    binomHeapCheckRootListInvariants(h);
+#endif
+    return minKey;
+}
+
+void binomHeapDecreaseKey(BinomHeapNode *node, int newKey) {
+    assert(newKey <= node->key);
+    while (node->parent && newKey <= node->key) {
+        node->key = node->parent->key;
+        node = node->parent;
+    }
+    node->key = newKey;
+}
+
 void binomHeapPrint(const BinomHeap *h) {
     printf("n: %zu\n", h->size);
     BinomHeapNode *cur = h->root;
@@ -203,19 +280,26 @@ void binomHeapPrint(const BinomHeap *h) {
 void binomHeapTest() {
     BinomHeap h;
     binomHeapInit(&h);
-    for (int n = 0; n < 100; n++) {
-        binomHeapAppend(&h, n);
+    BinomHeapNode *arr[10];
+    for (int n = 0; n < 10; n++) {
+        arr[n] = binomHeapAppend(&h, n);
     }
     binomHeapCheckRootListInvariants(&h);
     binomHeapPrint(&h);
-    BinomHeap h1;
-    binomHeapInit(&h1);
-    for (int n = 0; n < 100; n++) {
-        binomHeapAppend(&h1, n);
-    }
-    binomHeapUnion(&h, &h1);
-    printf("Merged:\n");
+    printf("Node 7: %d\n", arr[7]->key);
+    binomHeapDecreaseKey(arr[7], -1);
     binomHeapPrint(&h);
+    // int min = binomHeapExtractMin(&h);
+    // binomHeapPrint(&h);
+    // printf("Min: %d\n", min);
+    // BinomHeap h1;
+    // binomHeapInit(&h1);
+    // for (int n = 0; n < 100; n++) {
+    //     binomHeapAppend(&h1, n);
+    // }
+    // binomHeapUnion(&h, &h1);
+    // printf("Merged:\n");
+    // binomHeapPrint(&h);
 }
 
 int main() { binomHeapTest(); }

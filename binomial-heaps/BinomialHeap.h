@@ -5,7 +5,7 @@
 #include <stddef.h>
 
 void binomHeapInit(BinomHeap *h);
-void binomHeapAppend(BinomHeap *h, int key);
+BinomHeapNode *binomHeapAppend(BinomHeap *h, int key);
 void binomHeapUnion(BinomHeap *h1, BinomHeap *h2);
 void binomHeapPrint(const BinomHeap *h);
 void binomHeapCheckRootListInvariants(const BinomHeap *h);
